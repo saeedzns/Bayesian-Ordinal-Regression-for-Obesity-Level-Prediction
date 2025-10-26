@@ -1,0 +1,2322 @@
+---
+title: "Explore obesity category distribution and predictor characteristics"
+author: "Saeed Zohoorian"
+date: "2025-08-22"
+
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: false
+    theme: paper
+    highlight: tango
+    df_print: paged
+  word_document: default
+  pdf_document: default
+urlcolor: magenta
+linkcolor: cyan
+geometry: margin=1.25cm
+fontsize: 12pt
+header-includes:
+- \usepackage{bbold}
+- \usepackage{mdframed, xcolor}
+- \usepackage{graphicx}
+- \mdfsetup{frametitlealignment=\center}
+- \usepackage{multirow}
+- \definecolor{shadecolor}{rgb}{0.89,0.8,1}
+- \newcommand{\Prob}{\mathbb{P}}
+- \newcommand{\Exp}{\mathbb{E}}
+- \newcommand{\Var}{\mathbb{V}\mathrm{ar}}
+- \newcommand{\Cov}{\mathbb{C}\mathrm{ov}}
+- \newcommand{\blue}{\textcolor{blue}}
+- \newcommand{\darkgreen}{\textcolor[rgb]{0,.5,0}}
+- \newcommand{\gray}{\textcolor[rgb]{.3,.3,.3}}
+- \newcommand{\blueA}{\textcolor[rgb]{0,.1,.4}}
+- \newcommand{\blueB}{\textcolor[rgb]{0,.3,.6}}
+- \newcommand{\blueC}{\textcolor[rgb]{0,.5,.8}}
+- \newcommand{\evidenzia}{\textcolor[rgb]{0,0,0}}
+- \newcommand{\nero}{\textcolor[rgb]{0,0,0}}
+- \newcommand{\darkyel}{\textcolor[rgb]{.4,.4,0}}
+- \newcommand{\darkred}{\textcolor[rgb]{.6,0,0}}
+- \newcommand{\blueDek}{\textcolor[rgb]{0.6000000, 0.7490196, 0.9019608}}
+- \newcommand{\purpLarry}{\textcolor[rgb]{0.6901961, 0.2431373, 0.4784314}}
+- \newcommand{\lightgray}{\textcolor[rgb]{.8,.8,.8}}
+- \newcommand{\bfun}{\left\{\begin{array}{ll}}
+- \newcommand{\efun}{\end{array}\right.}
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+# **Introduction**
+
+Obesity is a major public health concern influenced by lifestyle, diet, and behavioral patterns. Understanding these factors can help design effective interventions.
+
+In this project, we aim to model the relationship between lifestyle factors and **obesity categories** (ordinal variable) using **Bayesian Ordinal Regression**. Unlike linear models, ordinal regression is suitable for ordered outcomes, and the Bayesian approach allows incorporation of prior knowledge and full uncertainty quantification.
+
+---
+
+# **Objective**
+
+- Explore obesity category distribution and predictor characteristics.
+- Build a **Bayesian ordinal regression** model to predict obesity category.
+- Interpret probabilistic effects of predictors.
+
+---
+
+## Dataset Overview
+
+The dataset used in this study contains information for estimating obesity levels in individuals from **Mexico, Peru, and Colombia**.  
+It includes **2111 records** with **17 attributes** describing eating habits, physical conditions, and lifestyle factors.  
+The target variable is **Obesity_category**, which represents ordered levels of obesity.  
+
+### Data Composition
+- **77%** of the data was synthetically generated using **Weka + SMOTE**.  
+- **23%** was collected directly from users through a web platform.  
+
+### Variables
+
+The dataset includes both **continuous** and **categorical** predictors:  
+
+- **Demographic**:  
+  - `Gender`: Gender of the individual.  
+  - `Age`: Age (in years).  
+  - `Height`: Height (in meters).  
+  - `Weight`: Weight (in kilograms).  
+
+- **Family/Medical**:  
+  - `family_history_with_overweight`: Whether a family member has suffered from overweight (Yes/No).  
+
+- **Dietary habits**:  
+  - `FAVC`: Frequent consumption of high-caloric food (Yes/No).  
+  - `FCVC`: Frequency of vegetable consumption in meals (scale 1–3).  
+  - `NCP`: Number of main meals per day.  
+  - `CAEC`: Food consumption between meals (Never, Sometimes, Frequently, Always).  
+  - `CH2O`: Daily water consumption (liters).  
+  - `CALC`: Alcohol consumption frequency (Never, Sometimes, Frequently, Always).  
+
+- **Lifestyle/Behavior**:  
+  - `SMOKE`: Smoking habit (Yes/No).  
+  - `SCC`: Monitoring of daily calorie consumption (Yes/No).  
+  - `FAF`: Physical activity frequency (hours per week).  
+  - `TUE`: Time spent daily using technology devices (hours).  
+  - `MTRANS`: Main mode of transportation (Walking, Bike, Public Transport, Car, Motorcycle).  
+
+- **Target variable**:  
+  - `NObeyesdad`: Obesity level (Insufficient Weight, Normal Weight, Overweight I, Overweight II, Obesity I, Obesity II, Obesity III).  
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#Libraries
+library(clubSandwich)
+library(ggplot2)
+library(corrplot)
+library(stats)
+library(brms)
+library(scales)
+library(bayesplot)
+library(e1071)
+library(reshape2)
+library(GGally)
+library(plotly)
+library(patchwork)
+library(posterior)
+library(lme4)
+library(broom.mixed)
+library(gamlss)
+library(glmmTMB)
+library(DHARMa)
+library(coda)
+library(rjags)
+library(coda)
+library(bayesplot)
+library(dplyr)
+library(tidyr)
+library(loo)
+library(ordinal)
+library(RColorBrewer)
+library(FSelectorRcpp)
+library(caret)
+library(randomForest)
+library(gridExtra)
+library(Hmisc)
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+data = read.csv("obesity_raw.csv")
+names(data) <- gsub(x = names(data),
+                    pattern = "\\.",
+                    replacement = "_")
+# Outcome as ordered factor
+levels <- c("Insufficient_Weight","Normal_Weight",
+            "Overweight_Level_I","Overweight_Level_II",
+            "Obesity_Type_I","Obesity_Type_II","Obesity_Type_III" )
+
+# Convert the column to an ordered factor
+data$Obesity_category <- factor(data$NObeyesdad, levels = levels, ordered = TRUE)
+data <- data[ , !(names(data) %in% c("NObeyesdad"))]
+
+categorical_vars <- c('Gender', 'family_history_with_overweight', 'FAVC', 'CAEC',
+                      'SMOKE', 'SCC', 'CALC', 'MTRANS')
+
+continuous_vars <- c('Age', 'Height', 'Weight', 'FCVC', 'NCP', 'CH2O', 'FAF', 'TUE')
+
+head(data,5)
+```
+## Data Preparation and EDA
+
+The dataset used in this project is the **UCI Obesity Dataset** (*Estimation of Obesity Levels Based on Eating Habits and Physical Condition*), available at:  
+[UCI Obesity Dataset](https://archive.ics.uci.edu/dataset/544/estimation+of+obesity+levels+based+on+eating+habits+and+physical+condition).  
+
+The data was first fetched in **Google Colab (Python)** and saved as (`obesity_raw.csv`) for import into **R**.  
+Subsequently, **exploratory data analysis (EDA)** was carried out to select appropriate variables, verify data quality, and ensure the dataset was consistent and suitable for further statistical modeling.
+
+
+### Missing Values
+A preliminary check for null values confirmed that the dataset has **no missing values** across any of its features:
+
+
+This ensures the dataset is clean and ready for modeling.
+
+
+
+### Distribution of Obesity Levels
+The target variable `NObeyesdad` was examined to understand class balance.  
+The distribution is fairly even across categories, which is beneficial for classification tasks:  
+
+- All obesity levels (Normal, Overweight I & II, Obesity I–III, Insufficient Weight) are well represented.  
+- **Obesity Type I** has the highest count, while **Insufficient Weight** has the lowest.  
+- The relatively balanced distribution suggests that the model will not suffer significantly from class imbalance.  
+
+This makes the dataset particularly suitable for **ordinal classification approaches**, such as Bayesian ordinal regression.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Check category distribution
+ggplot(data, aes(x = `Obesity_category`)) +
+  geom_bar(fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Distribution of Obesity Categories", x = "Obesity Category", y = "Count")
+
+```
+
+
+## **Relationship Between Continuous Predictors and Obesity Levels**
+
+According to the **boxplots of each continuous variable against the obesity categories**, several clear patterns emerge:
+
+- **Age**:  
+  Younger individuals are mostly in the *Insufficient* and *Normal Weight* groups, while higher ages are associated with *Overweight II* and *Obesity II*.  
+
+- **Height**:  
+  Height is fairly stable across categories, though individuals with *Obesity II* tend to be slightly taller on average, and those with *Insufficient Weight* slightly shorter.  
+
+- **Weight**:  
+  Displays the clearest separation, with a steady increase across categories from *Insufficient Weight* to *Obesity III*. This makes weight a dominant predictor of obesity level.  
+
+- **Vegetable Consumption (FCVC)**:  
+  *Insufficient Weight* and *Obesity III* groups report higher vegetable intake, while *Normal Weight* and *Obesity I* are lower.  
+
+- **Number of Main Meals (NCP)**:  
+  Most categories cluster around three meals per day, but *Obesity I* shows slightly fewer meals.  
+
+- **Water Intake (CH2O)**:  
+  Similar across groups, though *Obesity I/III* and *Overweight* groups show marginally higher consumption compared to *Normal Weight*.  
+
+- **Physical Activity Frequency (FAF)**:  
+  Higher activity is observed among *Normal* and *Insufficient Weight*, while it drops noticeably in *Obesity categories*, especially *Obesity III*.  
+
+- **Technology Use Time (TUE)**:  
+  Overall low across groups, but slightly higher in *Obesity III* and *Overweight II*, while *Normal Weight* tends to use less screen time.  
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Reshape data to long format
+df_long <- melt(data, id.vars = "Obesity_category", measure.vars = continuous_vars)
+
+# Create faceted boxplots with colors and fancy theme
+ggplot(df_long, aes(x = Obesity_category, y = value, fill = Obesity_category)) +
+  geom_boxplot(outlier.color = "black", outlier.shape = 16, outlier.size = 1.5, alpha = 0.8) +
+  facet_wrap(~variable, scales = "free_y", ncol = 3) +
+  scale_fill_brewer(palette = "Set2") +  # or "Paired", "Dark2"
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1, size = 10, face = "bold"),
+    axis.text.y = element_text(size = 10),
+    axis.title = element_text(size = 14, face = "bold"),
+    strip.text = element_text(size = 14, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    legend.position = "none",  # Remove redundant legend
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    x = "Obesity Level",
+    y = "",
+    title = "Continuous Variables vs Obesity Level"
+  )
+
+
+```
+
+### Interpretation:
+  
+Weight and age provide the strongest separation across obesity categories. Lifestyle-related variables such as **physical activity** and **vegetable intake** also show meaningful trends, reinforcing the link between daily habits and obesity progression. Meanwhile, water intake and technology use show smaller but consistent differences.
+
+---
+
+## Summary of Continuous Variables by Obesity Category
+
+To understand how continuous variables relate to obesity levels **histograms and density plots** were examined to visualize distributions and overlaps between categories.
+
+---
+
+### Key Observations
+
+1. **Age**  
+   - Younger individuals are more common in lower obesity categories.  
+   - Older individuals tend to appear in higher obesity categories.  
+   - Density plots show a clear upward shift of age distribution with increasing obesity levels.
+
+2. **Height**  
+   - Height is fairly consistent across obesity categories, with minor variations.  
+   - Density plots indicate overlapping distributions, suggesting height alone is not a strong predictor.
+
+3. **Weight**  
+   - Shows the strongest separation between obesity categories.  
+   - Higher obesity categories correspond to higher weight ranges.  
+   - Histograms and density plots clearly illustrate this trend.
+
+4. **Vegetable Consumption (FCVC)**  
+   - Slight differences observed across categories; lower consumption tends to associate with higher obesity levels.  
+   - Density plots show moderate overlap among groups.
+
+5. **Number of Main Meals (NCP)**  
+   - Most categories cluster around a similar number of meals.  
+   - Slight variations appear in extreme obesity categories.  
+   - Density plots show overlapping distributions, indicating limited predictive power.
+
+6. **Water Consumption (CH2O)**  
+   - Values are relatively similar across categories.  
+   - Histograms suggest some minor shifts, but distributions largely overlap.
+
+7. **Physical Activity Frequency (FAF)**  
+   - Higher activity is observed in lower obesity categories.  
+   - Activity decreases as obesity levels increase.  
+   - Density plots reveal noticeable differences between low and high obesity categories.
+
+8. **Technology Use (TUE)**  
+   - Overall low across all categories, with slightly higher usage in moderate obesity levels.  
+   - Density plots show substantial overlap, suggesting limited discriminatory power.
+
+---
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+# Create density plots
+density_plots <- lapply(continuous_vars, function(col) {
+  ggplot(data, aes_string(x = col, fill = "Obesity_category")) +
+    geom_density(alpha = 0.5) +
+    labs(title = col, x = col, y = "Density") +
+    theme_minimal() +
+    theme(legend.position = "right") # keep legend, will combine later
+})
+
+# Combine plots in 4 columns with one shared legend
+wrap_plots(density_plots, ncol = 4, guides = "collect") & theme(legend.position = "bottom")
+
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+# Create histogram plots
+hist_plots <- lapply(continuous_vars, function(col) {
+  ggplot(data, aes_string(x = col)) +
+    geom_histogram(bins = 30, fill = "lightblue", color = "black", alpha = 0.7) +
+    labs(title = paste("Distribution of", col), x = col, y = "Count") +
+    theme_minimal()
+})
+
+# Arrange histograms in 4 columns
+do.call(grid.arrange, c(hist_plots, ncol = 4))
+
+
+```
+
+
+### Interpretation
+
+- **Strongest continuous predictors:**  
+  - `Weight` and `Age` provide the clearest separation across obesity categories.  
+
+- **Moderate predictors:**  
+  - `FAF` and `FCVC` show some trends aligned with obesity levels.
+
+- **Weak predictors:**  
+  - `Height`, `NCP`, `CH2O`, and `TUE` show substantial overlap across categories.  
+
+  
+---
+
+
+## **Relationship Between Categorical Predictors and Obesity Levels**
+
+To better understand how lifestyle and behavioral variables relate to obesity, we examined the distribution of **categorical predictors** across the different obesity categories.  
+The figure below shows bar plots for each categorical variable against `Obesity_category`.
+
+**Key observations:**
+
+### Gender
+- Both males and females are represented across all levels.  
+- Females appear more in the higher obesity categories.  
+- Males dominate moderate obesity groups.
+
+### Family History with Overweight
+- Strong link: those with family history are more likely obese.  
+- No family history → more normal/underweight cases.
+
+### High-Calorie Food Consumption (FAVC)
+- Frequent consumption is clearly tied to obesity.  
+- Avoiding high-calorie food is common in normal weight cases.
+
+### Eating Between Meals (CAEC)
+- Occasional snacking is strongly linked to obesity.  
+- Never snacking → more overweight than obese.  
+- Frequent/always snacking → mixed distribution.
+
+### Smoking
+- Both smokers and non-smokers appear in obese groups.  
+- No clear protective effect of smoking.
+
+### Calories Monitoring (SCC)
+- Weak impact.  
+- Tracking calories does not consistently reduce obesity.
+
+### Alcohol Consumption (CALC)
+- All categories present across drinking habits.  
+- Alcohol use alone is not decisive.
+
+### Transportation Mode (MTRANS)
+- Public transport use is common in obese groups.  
+- Walking/biking more linked to normal weight.  
+- Car users spread across overweight/obese.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+df <- data.frame(data)
+
+# Ensure all categorical vars and target are factors
+df[categorical_vars] <- lapply(df[categorical_vars], as.factor)
+df$Obesity_category <- as.factor(df$Obesity_category)
+
+# Create custom gradient colors (light red → dark orange)
+n_levels <- length(levels(df$Obesity_category))
+palette_colors <- colorRampPalette(c("#FFCCCC", "#FF6600"))(n_levels)
+
+# Create plots
+plots <- list()
+for (col in categorical_vars) {
+  p <- ggplot(df, aes_string(x = col, fill = "Obesity_category")) +
+    geom_bar(position = position_dodge(width = 0.8), color = "black") +
+    scale_fill_manual(values = palette_colors) +
+    labs(title = paste(col, "vs Obesity Level"), x = col, y = "Count") +
+    theme_minimal(base_size = 14) +
+    theme(
+      axis.text.x = element_text(angle = 30, hjust = 1),
+      plot.title = element_text(size = 14, face = "bold"),
+      legend.position = "bottom"
+    )
+  plots[[col]] <- p
+}
+
+final_plot <- wrap_plots(plots, ncol = 4) +
+  plot_layout(guides = "collect") & theme(legend.position = "bottom")
+
+final_plot
+
+
+
+```
+
+
+---
+
+### Interpretation:
+
+Lifestyle factors (family history, high-calorie food, snacking habits) show the strongest links to obesity, while smoking, alcohol, and calorie monitoring have weaker associations.
+
+---
+
+## Proportion Analysis of Categorical Variables
+
+To better understand the relationship between categorical predictors and obesity categories, we computed the **proportion of individuals in each obesity level within each category**.  
+This approach allows us to compare relative likelihoods across categories, independent of category size.
+
+---
+
+### Key Observations
+
+1. **Gender**  
+   - Females tend to appear more in the higher obesity categories, while males are more common in moderate obesity groups.  
+   - This suggests a potential gender-based trend in obesity levels.
+
+2. **Family History with Overweight**  
+   - Individuals with a family history of overweight are more likely to fall into higher obesity categories.  
+   - Those without such a history are more frequently found in lower obesity categories.  
+   - Indicates that family history is an important predictor of obesity.
+
+3. **High-Calorie Food Consumption (FAVC)**  
+   - Frequent consumers of high-calorie foods are more likely to be in higher obesity categories.  
+   - Non-consumers tend to appear in lower obesity categories.
+
+4. **Eating Between Meals (CAEC)**  
+   - Occasional or frequent snacking is associated with higher obesity levels.  
+   - People who rarely or always snack are more often in lower obesity categories.
+
+5. **Smoking (SMOKE)**  
+   - Smokers appear across all obesity categories, with no clear protective or risk pattern evident.
+
+6. **Calorie Monitoring (SCC)**  
+   - Tracking calories does not show a consistent association with obesity levels.  
+   - The impact appears weak across the categories.
+
+7. **Alcohol Consumption (CALC)**  
+   - Alcohol consumption patterns are mixed and do not clearly correspond to specific obesity levels.
+
+8. **Transportation Mode (MTRANS)**  
+   - Car users tend to appear more in moderate obesity categories.  
+   - Walking or biking is more common among lower obesity categories.  
+   - Public transportation users are distributed across all obesity levels.
+
+---
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+# Create proportion plots for categorical variables
+cat_plots <- lapply(categorical_vars, function(col) {
+  ggplot(df, aes_string(x = col, fill = "Obesity_category")) +
+    geom_bar(position = "fill") +  # normalize to proportions
+    scale_y_continuous(labels = percent_format()) +
+    labs(y = "Proportion", x = col, title = col) +
+    theme_minimal(base_size = 14) +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "right") # keep legend for patchwork
+})
+
+# Arrange plots in 3 columns with one shared legend
+wrap_plots(cat_plots, ncol = 4, guides = "collect") & theme(legend.position = "bottom")
+
+```
+
+
+### Interpretation
+
+- **Strongest categorical predictors:**  
+  - `family_history_with_overweight`, `FAVC`, and `CAEC`.  
+  - These variables demonstrate noticeable shifts in obesity proportions.  
+
+- **Weaker predictors:**  
+  - `SMOKE`, `SCC`, `CALC`, `MTRANS` — show more uniform distribution across obesity categories.  
+
+
+
+---
+
+
+### Feature Importance Analysis  
+
+We applied **three different approaches** to evaluate the predictors:
+
+
+### 1. Mutual Information (MI)
+
+To quantify the relationship between each predictor and the obesity categories, we calculated.
+
+MI measures how much knowing a predictor reduces uncertainty about the target variable. Higher MI indicates stronger relevance to predicting obesity levels.
+
+- **Most informative predictors:**  
+  - `Weight` and `Age` have the highest MI scores, indicating they provide the most information about obesity categories.  
+  - Lifestyle-related variables such as `FCVC` (vegetable consumption), `FAF` (physical activity), and `TUE` (technology use) also show moderate information.
+
+- **Moderately informative predictors:**  
+  - `CH2O` (water intake), `NCP` (number of main meals), and `Gender` have moderate MI, suggesting some contribution to obesity prediction.
+
+- **Weak predictors:**  
+  - Variables like `SCC` (calorie monitoring), `SMOKE` (smoking), `FAVC` (high-calorie food consumption), and `MTRANS` (transportation mode) show low MI scores, indicating minimal predictive power individually.
+
+---
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+df_mi <- data
+
+# Compute Mutual Information for each predictor with the target
+mi_scores <- information_gain(Obesity_category ~ ., data = df_mi)
+
+# Sort descending
+mi_scores <- mi_scores %>% arrange(desc(importance))
+
+# Plot MI scores
+ggplot(mi_scores, aes(x = reorder(attributes, importance), y = importance)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() + 
+  labs(title = "Mutual Information Scores for Predictors",
+       x = "Predictor",
+       y = "Mutual Information") +
+  theme_minimal(base_size = 14)
+```
+
+
+### 2. Correlation Analysis
+
+To assess potential redundancy among continuous predictors, we computed the **pairwise correlation matrix**. This helps identify multicollinearity, which can affect model stability and interpretability.
+
+---
+
+### Key Observations
+
+- Most correlations are **weak to moderate**, suggesting that the predictors largely provide independent information.  
+- **Highest correlation** observed is between `Weight` and `Height` (r ≈ 0.46), indicating a moderate positive relationship.  
+- Other correlations are low, generally below 0.3, confirming **low multicollinearity** among the remaining variables.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+df_cont <- data %>% select(all_of(continuous_vars))
+
+# Compute correlation matrix
+cor_matrix <- cor(df_cont, use = "complete.obs")
+
+corrplot(cor_matrix, method = "color", type = "full", 
+         tl.col = "black", tl.srt = 45, addCoef.col = "black", 
+         number.cex = 0.7, diag = TRUE,
+         col = colorRampPalette(c("blue","white","red"))(200))
+
+
+```
+
+### Implications for Data Preparation
+
+- `Weight` and `Height` are moderately correlated; in models sensitive to multicollinearity (e.g., linear regression), we could consider:  
+  - Standardizing variables, or  
+  - Creating a derived feature such as **BMI** (`Weight / Height^2`) to capture body mass in a single metric, which is also more interpretable in obesity prediction.
+
+
+
+### 3. Statistical and Model-Based Feature Selection
+
+To prepare predictors for the Bayesian Ordinal Regression model, we conducted a systematic feature selection process. The goal was to balance **predictive strength** and **model interpretability**, while avoiding unnecessary complexity in the Bayesian framework.
+
+---
+
+### Evaluation Methods
+
+We applied multiple complementary approaches to assess feature importance:
+
+1. **Mutual Information (MI)** – quantified the information each feature provides about the `Obesity_category`.
+2. **Statistical Tests**  
+   - **ANOVA F-test** (continuous predictors vs. obesity category)  
+   - **Chi-Square test** (categorical predictors vs. obesity category)  
+3. **Random Forest Feature Importance** – model-based measure of predictive contribution.
+
+By combining these rankings, we identified features that consistently demonstrated high or low importance.
+
+---
+
+### Results Summary
+
+- **Strong Predictors**  
+  - *Weight* and *Age* had the highest MI scores and feature importance across all methods.  
+  - *Height*, *Gender*, *Vegetable consumption (FCVC)*, *Number of meals (NCP)*, *Water consumption (CH2O)*, *Physical activity (FAF)*, *Snacking habits (CAEC)*, and *Family history of overweight* all showed moderate-to-strong predictive power.  
+  - *Technology use (TUE)* provided moderate information and was retained.
+
+- **Weak Predictors**  
+  - *Smoking (SMOKE)* and *Calorie monitoring (SCC)* consistently ranked at the bottom across all methods.  
+  - *High-calorie food consumption (FAVC)*, *Alcohol consumption (CALC)*, and *Transportation mode (MTRANS)* contributed weakly and inconsistently.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+X <- data %>% select(-Obesity_category)
+y <- data$Obesity_category
+
+# Encode categorical variables as factors
+categorical_varss <- names(X)[sapply(X, is.character)]
+for (col in categorical_varss) {
+  X[[col]] <- as.factor(X[[col]])
+}
+
+# --- STEP 1: Filter Methods ---
+
+# 1a. ANOVA F-test for continuous predictors
+anova_scores <- sapply(names(X), function(col) {
+  if (is.numeric(X[[col]])) {
+    summary(aov(X[[col]] ~ y))[[1]]["y", "F value"]
+  } else {
+    NA
+  }
+})
+
+# 1b. Chi-Square test for categorical predictors
+chi2_scores <- sapply(names(X), function(col) {
+  if (is.factor(X[[col]])) {
+    chisq <- chisq.test(table(X[[col]], y))
+    chisq$statistic
+  } else {
+    NA
+  }
+})
+
+# --- STEP 2: Model-Based Feature Importance (Random Forest) ---
+
+# Random Forest requires numeric encoding of factors
+X_encoded <- X
+for (col in categorical_vars) {
+  X_encoded[[col]] <- as.numeric(X_encoded[[col]])
+}
+
+rf_model <- randomForest(x = X_encoded, y = y, ntree = 500, importance = TRUE)
+rf_importances <- importance(rf_model, type = 1) # MeanDecreaseAccuracy
+rf_importances <- rf_importances[, 1] # convert to vector
+
+# --- Combine Results ---
+
+feature_ranking <- data.frame(
+  Feature = names(X),
+  ANOVA_F = anova_scores,
+  Chi2 = chi2_scores,
+  RF_Importance = rf_importances
+)
+
+# Normalize ranks and compute average rank
+feature_ranking <- feature_ranking %>%
+  mutate(
+    ANOVA_Rank = rank(-ANOVA_F, na.last = "keep"),
+    Chi2_Rank = rank(-Chi2, na.last = "keep"),
+    RF_Rank = rank(-RF_Importance, na.last = "keep"),
+    RankScore = rowMeans(cbind(ANOVA_Rank, Chi2_Rank, RF_Rank), na.rm = TRUE)
+  ) %>%
+  arrange(RankScore)
+
+
+print(feature_ranking)
+
+
+```
+
+### Final Feature Selection
+
+Based on the combined evidence, we recommend **removing weak predictors** to improve Bayesian model efficiency without losing interpretability.
+
+- **Remove:**  
+  - `SMOKE` (Smoking)  
+  - `SCC` (Calorie monitoring)  
+  - `FAVC` (High-calorie food consumption)  
+  - `CALC` (Alcohol consumption)  
+  - `MTRANS` (Transportation mode)  
+
+- **Keep:**  
+  - `Weight`  
+  - `Age`  
+  - `Height`  
+  - `Gender`  
+  - `FCVC` (Vegetable consumption)  
+  - `NCP` (Number of main meals)  
+  - `CH2O` (Water consumption)  
+  - `FAF` (Physical activity)  
+  - `CAEC` (Snacking habits)  
+  - `family_history_with_overweight`  
+  - `TUE` (Technology use)  
+
+---
+
+### Conclusion
+
+The final feature set balances **biological predictors** (e.g., weight, age, height, gender), **behavioral variables** (diet, activity, technology use), and **family history**, while excluding low-utility variables. This streamlined set will be used in the **Bayesian Ordinal Regression Model** to ensure efficient inference and robust interpretation of obesity predictors.
+  
+---
+
+### **Feature Engineering: Adding BMI**
+
+**Observation from EDA:** 
+
+- Boxplots showed that **Weight** had the strongest separation across obesity categories.  
+- **Height**, while less predictive on its own, influences body size and should be considered to avoid misinterpretation.  
+- A tall person might weigh more but still have a healthy body composition, so weight alone can be misleading.
+
+To better capture body size, we engineered a new feature **BMI** using the standard clinical formula:  
+\[
+BMI = \frac{Weight}{Height^2}
+\]
+
+While **Weight** showed the strongest separation across obesity categories, it does not account for differences in **Height**.  
+By replacing `Weight` and `Height` with **BMI**, we reduce redundancy and multicollinearity, while providing a clinically recognized and interpretable measure of body composition.  
+This ensures that the model evaluates obesity risk on a normalized scale rather than raw body measurements.
+
+---
+
+## Data Preprocessing
+
+We prepared the dataset by selecting only the predictors retained from feature selection, excluding weak variables such as `SMOKE`, `SCC`, `FAVC`, `CALC`, and `MTRANS`.  
+Binary predictors (`Gender`, `family_history_with_overweight`) were encoded as 0/1, and continuous predictors were standardized for comparability.  
+The categorical variable `CAEC` was converted into an ordered factor with levels `no < Sometimes < Frequently < Always`.  
+Finally, dummy variables (`CAEC_Sometimes`, `CAEC_Frequently`, `CAEC_Always`) were created with `"no"` as the reference category, ensuring the dataset is ready for Bayesian ordinal regression.
+  
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+data <- read.csv("obesity_raw.csv")
+
+# Clean column names
+names(data) <- gsub(x = names(data), pattern = "\\.", replacement = "_")
+
+# Convert target to ordered factor
+levels <- c("Insufficient_Weight","Normal_Weight",
+            "Overweight_Level_I","Overweight_Level_II",
+            "Obesity_Type_I","Obesity_Type_II","Obesity_Type_III")
+
+data$Obesity_category <- factor(data$NObeyesdad, levels = levels, ordered = TRUE)
+data <- data[ , !(names(data) %in% c("NObeyesdad"))]
+
+# Compute BMI: Weight (kg) / Height^2 (m^2)
+data$BMI <- data$Weight / (data$Height^2)
+
+# Keep only selected features (drop SMOKE, SCC, FAVC, CALC, MTRANS)
+selected_vars <- c("Gender", "family_history_with_overweight", 
+                   "Weight", "Age", "Height", 
+                   "FCVC", "NCP", "CH2O", "FAF", "TUE",
+                   "CAEC", "Obesity_category", "BMI")
+
+data <- data[ , names(data) %in% selected_vars]
+
+# Encode binary categorical variables as 0/1
+binary_vars <- c('Gender', 'family_history_with_overweight')
+data[binary_vars] <- lapply(data[binary_vars], function(x) ifelse(x %in% c('Male', 'yes'), 1, 0))
+
+# Scale continuous variables
+continuous_vars <- c('Age', 'Height', 'Weight', 'FCVC', 'NCP', 'CH2O', 'FAF', 'TUE', 'BMI')
+data[continuous_vars] <- scale(data[continuous_vars])
+
+data1 <- data.frame(data)
+
+data$CAEC <- factor(data$CAEC, 
+                    levels = c("no", "Sometimes", "Frequently", "Always"),
+                    ordered = TRUE)
+
+# Create dummies via model.matrix, drop intercept, then drop the baseline "no"
+mm <- model.matrix(~ CAEC - 1, data = data)         # CAECno, CAECSometimes, CAECFrequently, CAECAlways
+mm <- mm[, colnames(mm) != "CAECno", drop = FALSE]  # remove baseline column
+
+# Rename to use underscores: CAEC_Sometimes, CAEC_Frequently, CAEC_Always
+colnames(mm) <- sub("^CAEC", "CAEC_", colnames(mm))
+
+# Bind dummies and remove original CAEC
+data <- cbind(data, mm)
+
+# Drop CAEC, Weight and Height
+data <- data[ , !(names(data) %in% c("CAEC", "Weight", "Height"))]
+
+# Mapping of abbreviations to short meanings
+col_meanings <- c(
+  FCVC       = "Veg_Freq",
+  NCP        = "Meals_Per_Day",
+  CH2O       = "Water_Intake",
+  FAF        = "PhysAct_Freq",
+  TUE        = "Tech_Use",
+  family_history_with_overweight = "FamHist_Overweight"
+)
+
+# Rename columns using base R
+names(data) <- ifelse(names(data) %in% names(col_meanings),
+                      col_meanings[names(data)],
+                      names(data))
+
+head(data,5)
+
+```
+
+
+# Bayesian Analysis
+
+In this section of the project, we will employ a **Bayesian Ordinal Regression Model** using **Modular JAGS** to analyze the relationship between several predictors and an ordinal outcome variable (`Obesity_category`). Unlike standard linear or logistic regression, ordinal regression is specifically designed for ordered categorical outcomes, which makes it ideal for this analysis.
+
+Bayesian models are particularly suitable because they allow us to incorporate prior beliefs and quantify uncertainty through posterior distributions. Furthermore, we will use **two modular JAGS models** to handle parameter estimation, model diagnostics, and posterior predictive checks (PPC).
+
+---
+
+## **Bayesian Ordinal Regression Model**
+
+### Why Ordinal Regression?
+
+The response variable, `Obesity_category`, is an ordinal variable with multiple ordered categories (e.g., *Normal*, *Overweight*, *Obese*). Standard linear regression is inappropriate because the outcome is not continuous, and simple multinomial models ignore the ordering information. Therefore, an **ordinal logistic model** is chosen, extended into a Bayesian framework for flexibility and uncertainty estimation.
+
+---
+
+### Model Specification
+
+The ordinal model uses a cumulative logit link:
+
+\[
+\text{logit}\big( P(Y_i \leq k) \big) = \alpha_k - \mathbf{x}_i^\top \beta
+\]
+
+- \( Y_i \) is the obesity category for individual \( i \).
+- \( \alpha_k \) are the ordered cutpoints (thresholds) that separate categories.
+- \( \beta \) is the vector of regression coefficients.
+- The probability of each category is computed from the cumulative probabilities.
+
+In JAGS, this is implemented using **cutpoints** and a set of **incremental priors** to ensure ordering constraints.
+
+
+## Priors
+
+We use **weakly informative priors** to let the data dominate but avoid extreme values:
+
+- \( \beta_j \sim \text{Normal}(0, 0.01) \) for all predictors.
+- Cutpoints are ordered via exponential increments:
+  - \( \text{cutpoints}[1] \sim \text{Normal}(0, 0.01) \)
+  - \( \delta_k \sim \text{Normal}(0, 0.01) \), and \( \text{cutpoints}[k] = \text{cutpoints}[k-1] + e^{\delta_k} \)
+
+This ensures monotonic ordering of thresholds.
+
+
+## Data & Predictors
+
+```{r Data preparation I, message=FALSE, warning=FALSE, echo=FALSE}
+#========================================================
+# 1) DATA PREPARATION FOR BAYESIAN ORDINAL REGRESSION
+#========================================================
+
+predictors <- c(
+  "Gender", "Age", "FamHist_Overweight", "Veg_Freq", 
+  "Meals_Per_Day", "Water_Intake", "PhysAct_Freq", 
+  "Tech_Use", "BMI", 
+  "CAEC_Sometimes", "CAEC_Frequently", "CAEC_Always"
+)
+
+X <- as.matrix(data[, predictors])
+
+
+N <- nrow(X)
+P <- ncol(X)
+y <- as.numeric(data$Obesity_category)
+K <- length(levels(data$Obesity_category))
+
+# Data list for JAGS
+data_jags <- list(
+  N = N,
+  P = P,
+  K = K,
+  y = y,
+  X = X
+)
+
+
+# Interpretation printed inside the chunk:
+cat("\nInterpretation: Prepared design matrix X with", P, "predictors and", N, "observations.\n")
+cat("Obesity target has", K, "ordered categories.\n")
+```
+
+
+## **MODELS**
+
+### 2.1 **Base Model with Log-Likelihood**
+
+This model estimates the regression coefficients (`β`) and ordered cutpoints for the ordinal outcome.
+It assumes proportional odds, meaning predictors have the same effect across thresholds.
+Log-likelihoods (`ll[i]`) are computed for WAIC and LOO model comparison.
+The model uses weakly informative priors to allow flexibility without strong assumptions.
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+ordinal_model_base <- "
+model {
+  for (i in 1:N) {
+    eta[i] <- inprod(beta[], X[i,])
+    
+    # cumulative probabilities
+    for (k in 1:(K-1)) {
+      logit(q[i,k]) <- cutpoints[k] - eta[i]
+    }
+
+    # category probabilities
+    p[i,1] <- q[i,1]
+    for (k in 2:(K-1)) {
+      p[i,k] <- max(1.0E-10, q[i,k] - q[i,k-1])
+    }
+    p[i,K] <- max(1.0E-10, 1 - q[i,K-1])
+
+    # likelihood
+    y[i] ~ dcat(p[i,1:K])
+
+    # log-likelihood for WAIC/LOO
+    ll[i] <- log(p[i,y[i]])
+  }
+
+  # Priors
+  for (j in 1:P) {
+    beta[j] ~ dnorm(0, 0.01)
+  }
+
+  # Ordered cutpoints via positive increments
+  cutpoints[1] <- cutpoints_raw[1]
+  for (k in 2:(K-1)) {
+    cutpoints[k] <- cutpoints[k-1] + exp(delta[k-1])
+  }
+  cutpoints_raw[1] ~ dnorm(0, 0.01)
+  for (k in 1:(K-2)) {
+    delta[k] ~ dnorm(0, 0.01)
+  }
+}
+"
+writeLines(ordinal_model_base, "ordinal_model_base.jags")
+
+
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#=========================================================
+# 3) INITIAL VALUES
+#=========================================================
+inits <- function() {
+  list(
+    beta = rnorm(P, 0, 0.1),
+    cutpoints_raw = rnorm(1, 0, 0.1),
+    delta = rnorm(K-2, 0, 0.1)
+  )
+}
+
+```
+
+```{r Ordinal base model, message=FALSE, warning=FALSE, cache = TRUE, echo=FALSE}
+
+#=========================================================
+# 4) FIT BASE MODEL (PARAMETER ESTIMATION)
+#=========================================================
+model_base <- jags.model("ordinal_model_base.jags", data = data_jags, inits = inits, n.chains = 3)
+update(model_base, 2000)  # burn-in
+samples_base <- coda.samples(model_base, variable.names = c("beta", "cutpoints"), n.iter = 5000)
+
+save(model_base, file = "model_base.RData")
+
+summary(samples_base)
+```
+
+# Base Model Summary
+
+- The model estimated 12 regression coefficients and 6 ordered cutpoints using 3 chains with 5000 post-warmup samples each.
+- Posterior means for most \(\beta\) parameters are centered near zero, except \(\beta[1]\) (≈ -1.20) and \(\beta[9]\) (≈ 28.6), which shows a large positive effect.
+- Cutpoints increase sequentially from approximately -38.4 to 33.6, indicating well-separated ordinal thresholds.
+- R-hat values (from prior diagnostics) were close to 1, and credible intervals suggest reasonable uncertainty around estimates.
+
+
+
+#### **Convergence diagnostic**
+
+For the evaluation of the MCMC convergence *Traceplot*, *density plot*
+and *Rhat* from the model summary were used.
+
+***Traceplot***
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#=========================================================
+# 5) CONVERGENCE DIAGNOSTICS (USING BASE MODEL DRAWS)
+#=========================================================
+
+gelman_diags <- gelman.diag(samples_base, autoburnin = FALSE, multivariate = FALSE)
+# Extract Rhat for each parameter
+rhat_values <- gelman_diags$psrf[, "Point est."]
+
+ess <- effectiveSize(samples_base)
+
+# Trace & density & ACF plots
+pars_beta <- paste0("beta[", 1:P, "]")
+pars_cut  <- paste0("cutpoints[", 1:(K-1), "]")
+
+mcmc_trace(samples_base, pars = pars_beta)
+mcmc_trace(samples_base, pars = pars_cut)
+
+mcmc_dens_overlay(samples_base, pars = pars_beta)
+mcmc_dens_overlay(samples_base, pars = pars_cut)
+
+mcmc_acf_bar(samples_base, pars = pars_beta)
+mcmc_acf_bar(samples_base, pars = pars_cut)
+
+
+
+# View Rhat
+print(rhat_values)
+# Effective size
+print(ess)
+```
+
+**Traceplots**
+
+- The traceplots show mixing of chains for \(\beta[1]\) to \(\beta[12]\).
+- Most coefficients exhibit good chain overlap and stable variance, suggesting convergence.
+- However, parameters such as \(\beta[9]\) and \(\beta[10]\) show more fluctuation, which may indicate slower mixing.
+
+overall trace behavior is satisfactory. The fluctuating chains for a few coefficients suggest monitoring those parameters (longer runs or tuning may help).
+
+
+**Density plots for \(\beta\))**
+
+- Density plots show the posterior distributions of the regression coefficients across chains.
+- Most \(\beta\) parameters show overlapping posterior distributions across the 3 chains — a good sign of convergence.
+- Slight differences are visible for some coefficients (for example \(\beta[9]\), \(\beta[10]\)), which matches the traceplot observations: these parameters mix more slowly and show more sampling variability.
+
+posterior densities largely align across chains. Parameters with slight misalignment should be monitored and, if necessary, re-run with more iterations or adjusted sampler settings.
+
+
+
+**Density plots for cutpoints**
+
+- Density plots show the posterior distributions of the ordered cutpoints.
+- Chains generally align for most cutpoints, though some differences are visible (e.g., cutpoints 1–3).
+- This suggests that while convergence is mostly adequate, additional iterations or thinning could improve mixing for a few cutpoints.
+
+Cutpoints appear well-identified overall but might benefit from extra sampling effort to tighten posterior overlap where minor discrepancies exist.
+
+
+**Autocorrelation**
+
+- Autocorrelation decreases as lag increases for most parameters, which shows the chains are mixing.
+- However, several parameters retain relatively high autocorrelation at short lags, indicating that successive samples are not fully independent.
+- This implies a reduced effective sample size (ESS) for those parameters.
+
+
+
+#### Summary and interpretation
+
+- The Base Model with Log-Likelihood converges adequately overall.
+- Regression coefficients (\(\beta\)) and cutpoints are well estimated with generally stable chains and overlapping posterior densities.
+- A subset of parameters (notably \(\beta[9]\), \(\beta[10]\), and some early cutpoints) show slower mixing and higher short-lag autocorrelation.
+
+
+
+### **Model check diagnostics**
+
+The diagnostic model adds pointwise log-likelihoods to compute WAIC or LOO for model comparison.
+
+## 2.2 Posterior Predictive Check (PPC) Model
+
+This model extends the base model by generating replicated outcomes (`y_rep`) for each observation.
+Posterior predictive checks compare simulated data to observed data to assess model adequacy.
+If replicated and observed distributions match, the model fits well.
+Large discrepancies suggest possible model misspecification.
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+ordinal_model_ppc <- "
+model {
+  for (i in 1:N) {
+    eta[i] <- inprod(beta[], X[i,])
+    
+    # cumulative probabilities
+    for (k in 1:(K-1)) {
+      logit(q[i,k]) <- cutpoints[k] - eta[i]
+    }
+
+    # category probabilities
+    p[i,1] <- q[i,1]
+    for (k in 2:(K-1)) {
+      p[i,k] <- max(1.0E-10, q[i,k] - q[i,k-1])
+    }
+    p[i,K] <- max(1.0E-10, 1 - q[i,K-1])
+
+    # likelihood
+    y[i] ~ dcat(p[i,1:K])
+
+    # replicated outcome for PPC
+    y_rep[i] ~ dcat(p[i,1:K])
+  }
+
+  # Priors
+  for (j in 1:P) {
+    beta[j] ~ dnorm(0, 0.01)
+  }
+
+  # Ordered cutpoints via positive increments
+  cutpoints[1] <- cutpoints_raw[1]
+  for (k in 2:(K-1)) {
+    cutpoints[k] <- cutpoints[k-1] + exp(delta[k-1])
+  }
+  cutpoints_raw[1] ~ dnorm(0, 0.01)
+  for (k in 1:(K-2)) {
+    delta[k] ~ dnorm(0, 0.01)
+  }
+}
+"
+writeLines(ordinal_model_ppc, "ordinal_model_ppc.jags")
+
+```
+
+```{r PPC checks I, message=FALSE, warning=FALSE, echo=FALSE, cache = TRUE}
+
+#=========================================================
+# 6) POSTERIOR PREDICTIVE CHECKS (USING PPC MODEL)
+#=========================================================
+# Fit PPC model to get replicated outcomes
+model_ppc <- jags.model("ordinal_model_ppc.jags", data = data_jags, inits = inits, n.chains = 3)
+update(model_ppc, 2000)
+yrep_samps <- jags.samples(model_ppc, variable.names = c("y_rep"), n.iter = 5000)
+
+
+save(model_ppc, file = "model_ppc.RData")
+
+# y_rep array: iterations x chains x N
+yrep_arr <- yrep_samps$y_rep
+
+# Stack chains => matrix of (draws x N)
+yrep_mat <- do.call(rbind, lapply(seq_len(dim(yrep_arr)[2]), function(ch) {
+  yrep_arr[, ch, ]
+}))
+
+# Observed counts
+obs_counts <- as.numeric(table(factor(y, levels = 1:K)))
+
+# Sample S draws from y_rep to summarize replicated category counts
+set.seed(12)
+S <- 400
+idx <- sample(seq_len(nrow(yrep_mat)), S, replace = TRUE)
+pred_counts <- matrix(NA, nrow = K, ncol = S)
+
+for (s in 1:S) {
+  y_rep_s <- as.integer(yrep_mat[idx[s], ])
+  pred_counts[, s] <- tabulate(y_rep_s, nbins = K)
+}
+
+pred_mean <- rowMeans(pred_counts)
+pred_l    <- apply(pred_counts, 1, quantile, 0.025)
+pred_u    <- apply(pred_counts, 1, quantile, 0.975)
+
+df_counts <- data.frame(
+  category = factor(levels(data$Obesity_category)),
+  observed = obs_counts,
+  pred_mean, pred_l, pred_u
+)
+
+ggplot(df_counts, aes(x = category)) +
+  geom_col(aes(y = observed), fill = "grey70", alpha = 0.9) +
+  geom_errorbar(aes(ymin = pred_l, ymax = pred_u), width = 0.2) +
+  geom_point(aes(y = pred_mean), size = 2) +
+  coord_flip() +
+  labs(title = "Posterior Predictive Check: Category Counts",
+       y = "Counts", x = "Obesity category") +
+  theme_minimal()
+
+```
+cat("
+
+
+### Posterior Predictive Check — category counts
+Replicated counts line up with the observed for every class (no class is systematically over- or under-produced). That’s a good global fit for class frequencies.
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#=========================================================
+# 7) CALIBRATION (USING POSTERIOR MEANS FROM BASE MODEL)
+#=========================================================
+post <- as.matrix(samples_base)
+beta_cols <- grep("^beta\\[", colnames(post))
+cut_cols  <- grep("^cutpoints\\[", colnames(post))
+
+# Helper: compute category probabilities from betas & cutpoints
+pred_probs_ord <- function(beta_vec, cut_vec, X) {
+  eta <- as.numeric(X %*% beta_vec)
+  q   <- plogis(matrix(cut_vec, nrow = N, ncol = K-1, byrow = TRUE) - eta)
+  p   <- cbind(q[,1],
+               q[,2:(K-1), drop=FALSE] - q[,1:(K-2), drop=FALSE],
+               1 - q[,K-1])
+  p
+}
+
+Bmean <- colMeans(post[, beta_cols])
+Cmean <- colMeans(post[, cut_cols])
+p_mean <- pred_probs_ord(Bmean, Cmean, X)
+
+cal_list <- lapply(1:K, function(k) {
+  df <- data.frame(p_hat = p_mean[,k], yk = as.integer(y == k))
+    # Group by deciles using Hmisc::cut2
+  df$bin <- cut2(df$p_hat, g = 10)
+  
+  #df$bin <- cut(df$p_hat, breaks = quantile(df$p_hat, probs = seq(0, 1, 0.1)),
+  #              include.lowest = TRUE)
+  
+  df %>% group_by(bin) %>%
+    summarise(p_hat_bin = mean(p_hat), obs = mean(yk), .groups = "drop") %>%
+    mutate(category = levels(data$Obesity_category)[k])
+})
+cal_df <- bind_rows(cal_list)
+
+ggplot(cal_df, aes(x = p_hat_bin, y = obs)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  geom_point() + geom_line() +
+  facet_wrap(~ category) +
+  labs(title = "Calibration: observed vs predicted (deciles)",
+       x = "Mean predicted probability", y = "Observed frequency") +
+  theme_minimal()
+```
+### Calibration plots
+Lines hug the diagonal for all seven classes. The mildest wiggles appear around mid-probabilities (≈0.3–0.6) — especially for Overweight_Level_I and Obesity_Type_II — suggesting slight miscalibration there, but overall these are well-calibrated class probabilities.
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#=========================================================
+# 8) RESIDUAL CHECKS (RANDOMIZED QUANTILE RESIDUALS)
+#=========================================================
+Fcum <- t(apply(p_mean, 1, cumsum))
+a <- ifelse(y > 1, Fcum[cbind(1:N, y - 1)], 0)
+b <- Fcum[cbind(1:N, y)]
+u <- (a + b) / 2
+resid <- qnorm(pmin(pmax(u, 1e-6), 1 - 1e-6))
+
+# QQ plot
+qq_df <- data.frame(theo = sort(qnorm(ppoints(N))), samp = sort(resid))
+ggplot(qq_df, aes(x = theo, y = samp)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(title = "QQ plot of randomized quantile residuals",
+       x = "Theoretical N(0,1) quantiles", y = "Residuals") +
+  theme_minimal()
+
+# Residuals vs fitted
+Ey <- as.numeric(p_mean %*% (1:K))
+rvf_df <- data.frame(fitted = Ey, resid = resid)
+ggplot(rvf_df, aes(x = fitted, y = resid)) +
+  geom_point(alpha = 0.25) +
+  geom_smooth(se = FALSE) +
+  labs(title = "Residuals vs Fitted", x = "E[Y|X]", y = "Residuals") +
+  theme_minimal()
+
+```
+### QQ plot of randomized quantile residuals
+
+- The S-shape = non-normal tails (heavier tails than N(0,1)).
+- The flat pile near 0 is common with ordinal data (many residuals stack because outcomes are discrete).
+- Net: residual distribution isn’t perfectly normal → some tail misfit/underdispersion, often due to missing non-linearities, interactions, or slight threshold rigidity.
+
+### Residuals vs fitted
+- Banding is expected (residuals are discretized by categories).
+- The small dip at high fitted values hints at mild over-prediction for the highest categories.
+- No strong funneling → no major heteroskedasticity signal.
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#=========================================================
+# 9) PROPORTIONAL-ODDS VISUAL CHECK
+#=========================================================
+j <- which(colnames(X) == "BMI")   # choose predictor index
+x_seq <- seq(min(X[,j]), max(X[,j]), length.out = 60)
+X_bar <- colMeans(X)
+make_row <- function(xj) { r <- X_bar; r[j] <- xj; r }
+gridX <- t(sapply(x_seq, make_row))
+
+eta_grid <- as.numeric(gridX %*% Bmean)
+q_grid <- plogis(matrix(Cmean, nrow = length(x_seq), ncol = K-1, byrow = TRUE) - eta_grid)
+
+df_po <- as.data.frame(q_grid)
+colnames(df_po) <- paste0("Pr(Y<=k)@k=", 1:(K-1))
+df_po$x <- x_seq
+df_long <- pivot_longer(df_po, cols = starts_with("Pr("), names_to = "threshold", values_to = "cumprob")
+
+ggplot(df_long, aes(x = x, y = cumprob, color = threshold)) +
+  geom_line(size = 1) +
+  labs(title = paste("Proportional-odds visual check for predictor", colnames(X)[j]),
+       x = colnames(X)[j], y = "Cumulative probability") +
+  theme_minimal()
+
+```
+
+### Proportional-odds visual check for BMI
+Slopes are nearly the same across thresholds → the proportional-odds assumption looks reasonable for BMI.
+
+
+
+```{r Diagnostic part I, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+#=========================================================
+# 10) WAIC / PSIS-LOO (USING BASE MODEL WITH ll[i])
+#=========================================================
+model_base_diag <- jags.model("ordinal_model_base.jags", data = data_jags, inits = inits, n.chains = 3)
+update(model_base_diag, 2000)  # burn-in
+
+diag_samps <- jags.samples(model_base_diag, variable.names = c("ll"), n.iter = 5000)
+
+# ll array: iterations x chains x N  -> stack chains to (draws x N) matrix
+ll_arr <- diag_samps$ll
+ll_mat <- do.call(rbind, lapply(seq_len(dim(ll_arr)[2]), function(ch) {
+  ll_arr[, ch, ]
+}))
+
+# Sanity check
+cat("Number of draws:", nrow(ll_mat), "\n")
+cat("Number of observations:", ncol(ll_mat), "\n")
+
+# WAIC & PSIS-LOO
+waic_res <- waic(ll_mat)
+print(waic_res)
+
+loo_res <- loo(ll_mat)
+print(loo_res)
+
+```
+
+
+### WAIC / LOO output
+- All Pareto k < 0.7 → LOO estimates are reliable.
+
+
+### Bottom line
+- Counts match (PPC): good.  
+- Calibration: probabilities are calibrated across classes, with only minor mid-range drift.  
+- Proportional-odds: looks fine for BMI.  
+- Residuals: minor tail misfit and a slight over-prediction at the highest fitted values, but nothing catastrophic.
+")
+
+
+# SECOND MODEL: PARTIAL PROPORTIONAL-ODDS (PPO)
+
+
+In the second stage of our project, we extend the proportional odds model into a **partial proportional odds (PPO) model**. The key motivation is that the strict proportional odds assumption may not hold for all predictors. Some variables may influence different thresholds of the ordinal outcome in different ways, and PPO models allow us to capture this flexibility.
+
+---
+
+## Model Components
+
+1. **Proportional part (common effects):**
+   \[
+   \eta_{c,i} = \sum_{j=1}^{P_c} \beta_j X_{c,ij}
+   \]  
+   These predictors have the same effect across all thresholds.
+
+2. **Non-proportional part (threshold-specific effects):**
+   \[
+   \eta_{v,i,k} = \sum_{m=1}^Q \gamma_{k,m} Z_{im}
+   \]  
+   These predictors vary across thresholds, relaxing the proportional odds assumption.
+
+3. **Threshold-specific logits:**
+   \[
+   \text{logit}(q_{i,k}) = \text{cutpoints}[k] - \big(\eta_{c,i} + \eta_{v,i,k}\big)
+   \]
+
+4. **Outputs:**
+   - **Log-likelihoods (`ll[i]`)** for model comparison (WAIC/LOO).  
+   - **Posterior predictive replications (`y_rep[i]`)** for model adequacy checks.  
+
+---
+
+## Why We Use PPO Models
+
+- **Flexibility:** Captures predictors whose effects vary across outcome thresholds.  
+- **Improved fit:** Avoids bias when proportional odds assumption is violated.  
+- **Interpretability:** Separates predictors into proportional vs. non-proportional groups.  
+- **Model comparison:** Provides a broader framework; the proportional odds model is a special case when all $\gamma_{k,m}=0$.  
+
+---
+
+The PPO model improves our work by **relaxing strict assumptions**, **enhancing predictive accuracy**, and providing **deeper insights into predictor effects**. It extends the initial proportional odds models to better reflect the complexity of ordinal data.
+
+
+
+## **Data & Predictors**
+
+```{r Data preparation II, message=FALSE, warning=FALSE, echo=FALSE}
+
+#========================================================
+# 1) DATA SPLIT FOR PPO: Identify PO vs non-PO predictors
+#========================================================
+# Indices of predictors that violate proportional-odds (non-PO part)
+vary_vars_idx <- which(colnames(X) == "BMI") # Example: BMI violates PO
+
+stopifnot(is.matrix(X), all(vary_vars_idx %in% seq_len(ncol(X))))
+
+# Partition predictors
+common_idx <- setdiff(seq_len(ncol(X)), vary_vars_idx)
+
+Xc <- if (length(common_idx)) X[, common_idx, drop = FALSE] else matrix(0, nrow = N, ncol = 0)
+Zv <- X[, vary_vars_idx, drop = FALSE]
+Pc <- ncol(Xc)  # Number of PO predictors
+Q  <- ncol(Zv)  # Number of non-PO predictors
+
+# Data list for PPO
+data_jags_ppo <- list(
+  N = N,
+  K = K,
+  y = y,
+  Xc = Xc,
+  Pc = Pc,
+  Zv = Zv,
+  Q  = Q
+)
+
+# Predictor names for interpretation
+names_X  <- colnames(X)
+names_Xc <- if (Pc > 0) colnames(Xc) else character(0)
+names_Zv <- colnames(Zv)
+
+```
+
+
+#========================================================
+
+# 2) DEFINE TWO PPO MODELS (Base + PPC)
+
+#========================================================
+
+
+## 2.1 PPO Base Model (with log-likelihood for WAIC/LOO)
+ 
+The PPO base model extends the proportional odds framework by splitting predictors into proportional and non-proportional components.  
+It allows some effects to remain constant across thresholds while others vary by threshold.  
+This structure provides flexibility and avoids bias when the proportional odds assumption is violated.  
+Log-likelihood values are included for WAIC/LOO to enable model comparison. 
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+ppo_model_base <- "
+model {
+  for (i in 1:N) {
+    # Proportional-odds part
+    eta_c[i] <- inprod(beta[1:Pc], Xc[i, 1:Pc])
+
+    # Non-proportional part (varies by threshold)
+    for (k in 1:(K-1)) {
+      eta_v[i,k] <- inprod(gamma[k, 1:Q], Zv[i, 1:Q])
+      logit(q[i,k]) <- cutpoints[k] - (eta_c[i] + eta_v[i,k])
+    }
+
+    # Category probabilities
+    p[i,1] <- q[i,1]
+    for (k in 2:(K-1)) {
+      p[i,k] <- max(1.0E-10, q[i,k] - q[i,k-1])
+    }
+    p[i,K] <- max(1.0E-10, 1 - q[i,K-1])
+
+    # Likelihood
+    y[i] ~ dcat(p[i,1:K])
+
+    # Log-likelihood for WAIC/LOO
+    ll[i] <- log(p[i, y[i]] + 1.0E-12) # added small constant to avoid log(0)
+  }
+
+  # Priors
+  for (j in 1:Pc) {
+    beta[j] ~ dnorm(0, 0.01)
+  }
+  for (k in 1:(K-1)) {
+    for (m in 1:Q) {
+      gamma[k,m] ~ dnorm(0, 0.05)
+    }
+  }
+
+  # Ordered cutpoints
+  cutpoints[1] <- cut_raw
+  for (k in 2:(K-1)) {
+    cutpoints[k] <- cutpoints[k-1] + exp(delta[k-1])
+  }
+
+  cut_raw ~ dnorm(0, 0.01)
+  for (k in 1:(K-2)) {
+    delta[k] ~ dnorm(0, 0.01)
+  }
+}
+"
+
+writeLines(ppo_model_base, "ppo_model_base.jags")
+
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#========================================================
+# 3) INITIAL VALUES FOR PPO
+#========================================================
+inits_ppo <- function() {
+  list(
+    beta = if (Pc > 0) rnorm(Pc, 0, 0.1) else numeric(0),
+    gamma = matrix(rnorm((K-1) * Q, 0, 0.1), nrow = K-1, ncol = Q),
+    cut_raw = rnorm(1, 0, 0.1),
+    delta = rnorm(K-2, 0, 0.1)
+  )
+}
+
+
+```
+
+```{r ppo base model, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+#========================================================
+# 4) FIT BASE MODEL (PARAMETERS) — PPO
+#========================================================
+model_ppo_base <- jags.model("ppo_model_base.jags",
+                             data = data_jags_ppo,
+                             inits = inits_ppo, n.chains = 3)
+update(model_ppo_base, 2000)  # burn-in
+
+vars_ppo <- c(if (Pc > 0) "beta", "gamma", "cutpoints")
+samples_ppo <- coda.samples(model_ppo_base, variable.names = vars_ppo, n.iter = 5000)
+
+save(model_ppo_base, file = "model_ppo_base.RData")
+
+
+summary(samples_ppo)
+
+```
+
+
+PPO relaxes the **proportional-odds assumption** by allowing threshold-specific effects for selected predictors.
+
+* **Interpretation on the cumulative-logit scale:**
+
+  * Positive coefficients decrease $Pr(Y \leq k)$, shifting probability mass toward higher outcome categories.
+
+* **Non-proportional effect ($\gamma_{k,1}$):**
+
+  * Strongly positive across thresholds.
+  * Peaks around mid-cutpoints, smaller at the top.
+  * Indicates **clear non-proportionality**.
+
+* **Proportional effects:**
+
+  * $\beta_1$ is negative.
+  * $\beta_9$ is positive.
+  * Other coefficients remain uncertain (centered near zero).
+
+* **Cutpoints:**
+
+  * Ordered and well-separated.
+  * Confirms the **ordinal structure is preserved**.
+
+---
+
+
+
+#### **Convergence diagnostic**
+
+For the evaluation of the MCMC convergence *Traceplot*, *density plot*
+and *Rhat* from the model summary were used.
+
+***Traceplot***
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#========================================================
+# 5) CONVERGENCE DIAGNOSTICS — PPO
+#========================================================
+gelman.diag(samples_ppo, autoburnin = FALSE, multivariate = FALSE)
+effectiveSize(samples_ppo)
+
+# Traces / densities
+pars_beta <- if (Pc > 0) paste0("beta[", 1:Pc, "]") else character(0)
+pars_gamma <- as.vector(outer(1:(K-1), 1:Q, function(k,m) sprintf("gamma[%d,%d]", k, m)))
+pars_cut <- paste0("cutpoints[", 1:(K-1), "]")
+
+mcmc_trace(samples_ppo, pars = c(pars_beta, pars_gamma, pars_cut))
+mcmc_dens_overlay(samples_ppo, pars = c(head(pars_beta, 5), head(pars_gamma, 5), head(pars_cut, 5)))
+mcmc_acf_bar(samples_ppo, pars = c(head(pars_beta, 5), head(pars_gamma, 5), head(pars_cut, 5)))
+
+```
+
+
+PPO structure is appropriate; most β coefficients show good mixing.
+
+Non-converged pieces: cutpoints[1] and γ[1,1] are problematic (R̂ ≈ 1.4–2.4, very low ESS); moderate issues for β9–β11, cutpoints[2,4], γ[2,1].
+
+chain separation in traces, mismatched chain densities, and slow ACF decay for these parameters.
+
+
+#### **Model check diagnostics**
+
+The diagnostic model adds pointwise log-likelihoods to compute WAIC or LOO for model comparison.
+
+## 2.2 PPO Posterior Predictive Check (PPC) Model
+
+The PPO PPC model has the same structure as the base model but adds replicated outcomes (`y_rep`).  
+
+These replications are compared against observed data to assess model adequacy.  
+If observed and replicated distributions align, the model is well-specified.  
+This step ensures our extended PPO framework not only fits better but also reflects the data realistically.
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+ppo_model_ppc <- "
+model {
+  for (i in 1:N) {
+    eta_c[i] <- inprod(beta[1:Pc], Xc[i, 1:Pc])
+    for (k in 1:(K-1)) {
+      eta_v[i,k] <- inprod(gamma[k, 1:Q], Zv[i, 1:Q])
+      logit(q[i,k]) <- cutpoints[k] - (eta_c[i] + eta_v[i,k])
+    }
+
+    p[i,1] <- q[i,1]
+    for (k in 2:(K-1)) {
+      p[i,k] <- max(1.0E-10, q[i,k] - q[i,k-1])
+    }
+    p[i,K] <- max(1.0E-10, 1 - q[i,K-1])
+
+    y[i] ~ dcat(p[i, 1:K])
+    y_rep[i] ~ dcat(p[i, 1:K])  # PPC replicated data
+  }
+
+  # Priors
+  for (j in 1:Pc) {
+    beta[j] ~ dnorm(0, 0.01)
+  }
+  for (k in 1:(K-1)) {
+    for (m in 1:Q) {
+      gamma[k,m] ~ dnorm(0, 0.05)
+    }
+  }
+
+  cutpoints[1] <- cut_raw
+  for (k in 2:(K-1)) {
+    cutpoints[k] <- cutpoints[k-1] + exp(delta[k-1])
+  }
+
+  cut_raw ~ dnorm(0, 0.01)
+  for (k in 1:(K-2)) {
+    delta[k] ~ dnorm(0, 0.01)
+  }
+}
+"
+
+writeLines(ppo_model_ppc, "ppo_model_ppc.jags")
+
+```
+
+```{r PPC checks II, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+#========================================================
+# 6) POSTERIOR PREDICTIVE CHECKS (COUNTS) — PPO
+#========================================================
+model_ppo_ppc <- jags.model("ppo_model_ppc.jags",
+                            data = data_jags_ppo,
+                            inits = inits_ppo, n.chains = 3)
+update(model_ppo_ppc, 2000)
+yrep_ppo <- jags.samples(model_ppo_ppc, variable.names = c("y_rep"), n.iter = 2000)
+
+save(model_ppo_ppc, file = "model_ppo_ppc.RData")
+
+# Stack chains to (draws x N)
+yrep_arr <- yrep_ppo$y_rep
+yrep_mat <- do.call(rbind, lapply(seq_len(dim(yrep_arr)[2]), function(ch) yrep_arr[, ch, ]))
+
+# Summarize category counts over S draws
+set.seed(13)
+S <- min(800, nrow(yrep_mat))
+idx <- sample(seq_len(nrow(yrep_mat)), S, replace = FALSE)
+pred_counts <- sapply(idx, function(r) tabulate(as.integer(yrep_mat[r, ]), nbins = K))
+pred_mean <- rowMeans(pred_counts)
+pred_l <- apply(pred_counts, 1, quantile, 0.025)
+pred_u <- apply(pred_counts, 1, quantile, 0.975)
+
+obs_counts <- as.numeric(table(factor(y, levels = 1:K)))
+
+df_counts <- data.frame(
+  category = factor(levels(data$Obesity_category)),
+  observed = obs_counts,
+  pred_mean, pred_l, pred_u
+)
+
+ggplot(df_counts, aes(x = category)) +
+  geom_col(aes(y = observed), fill = "grey70", alpha = 0.9) +
+  geom_errorbar(aes(ymin = pred_l, ymax = pred_u), width = 0.2) +
+  geom_point(aes(y = pred_mean), size = 2) +
+  coord_flip() +
+  labs(title = "PPO: Posterior Predictive Check — Category Counts",
+       y = "Counts", x = "Obesity category") +
+  theme_minimal()
+```
+### Posterior predictive check — category counts
+
+The PPO model reproduces class frequencies well; no systematic over/under-production by category.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#========================================================
+# 7) CALIBRATION (POSTERIOR MEANS) — PPO
+#========================================================
+post_ppo <- as.matrix(samples_ppo)
+beta_cols  <- if (Pc > 0) grep("^beta\\[", colnames(post_ppo)) else integer(0)
+gamma_cols <- grep("^gamma\\[", colnames(post_ppo))
+cut_cols   <- grep("^cutpoints\\[", colnames(post_ppo))
+
+Bmean <- if (Pc > 0) colMeans(post_ppo[, beta_cols, drop = FALSE]) else numeric(0)
+Gmean_vec <- colMeans(post_ppo[, gamma_cols, drop = FALSE])
+Gmean <- matrix(Gmean_vec, nrow = K-1, ncol = Q, byrow = TRUE)
+Cmean <- colMeans(post_ppo[, cut_cols, drop = FALSE])
+
+pred_probs_ppo <- function(beta_vec, gamma_mat, cut_vec, Xc, Zv) {
+  N <- nrow(Zv); K <- length(cut_vec) + 1
+  eta_c <- if (length(beta_vec)) as.numeric(Xc %*% beta_vec) else rep(0, N)
+  q <- matrix(NA_real_, nrow = N, ncol = K-1)
+  for (k in 1:(K-1)) {
+    eta_v_k <- as.numeric(Zv %*% gamma_mat[k, ])
+    q[, k] <- plogis(cut_vec[k] - (eta_c + eta_v_k))
+  }
+  p <- cbind(q[, 1],
+             if (K > 2) q[, 2:(K-1), drop = FALSE] - q[, 1:(K-2), drop = FALSE] else NULL,
+             1 - q[, K-1])
+  p
+}
+
+P_ppo_mean <- pred_probs_ppo(Bmean, Gmean, Cmean, Xc, Zv)
+
+cal_list <- lapply(1:K, function(k) {
+  df <- data.frame(p_hat = P_ppo_mean[, k], yk = as.integer(y == k))
+  
+  qs <- quantile(df$p_hat, probs = seq(0, 1, 0.1), na.rm = TRUE)
+  qs <- unique(qs)
+  
+  if (length(qs) > 1) {
+    df$bin <- cut(df$p_hat, breaks = qs, include.lowest = TRUE)
+  } else {
+    df$bin <- factor(1)
+  }
+  
+  df %>%
+    group_by(bin) %>%
+    summarise(p_hat_bin = mean(p_hat), obs = mean(yk), .groups = "drop") %>%
+    mutate(category = levels(data$Obesity_category)[k])
+})
+cal_df <- bind_rows(cal_list)
+
+ggplot(cal_df, aes(x = p_hat_bin, y = obs)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  geom_point() + geom_line() +
+  facet_wrap(~ category) +
+  labs(title = "PPO: Calibration (deciles)",
+       x = "Mean predicted probability", y = "Observed frequency") +
+  theme_minimal()
+
+```
+
+### Calibration (deciles) by class
+
+Probabilities are well-calibrated, with slight improvement over the PO model in mid-probability ranges.
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#========================================================
+# 8) RESIDUAL CHECKS — PPO
+#========================================================
+Fcum <- t(apply(P_ppo_mean, 1, cumsum))
+a <- ifelse(y > 1, Fcum[cbind(1:N, y - 1)], 0)
+b <- Fcum[cbind(1:N, y)]
+u <- (a + b) / 2
+resid <- qnorm(pmin(pmax(u, 1e-6), 1 - 1e-6))
+
+# QQ plot
+qq_df <- data.frame(theo = sort(qnorm(ppoints(N))), samp = sort(resid))
+ggplot(qq_df, aes(x = theo, y = samp)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(title = "PPO: QQ plot of randomized quantile residuals",
+       x = "Theoretical N(0,1) quantiles", y = "Residuals") +
+  theme_minimal()
+
+# Residuals vs fitted (ordinal scale)
+Ey <- as.numeric(P_ppo_mean %*% (1:K))
+rvf_df <- data.frame(fitted = Ey, resid = resid)
+ggplot(rvf_df, aes(x = fitted, y = resid)) +
+  geom_point(alpha = 0.25) +
+  geom_smooth(se = FALSE) +
+  labs(title = "PPO: Residuals vs Fitted", x = "E[Y|X]", y = "Residuals") +
+  theme_minimal()
+
+
+```
+### QQ plot of randomized quantile residuals
+
+Heavier-than-normal tails persist (typical with ordinal data). PPO mitigates mid-range misfit but doesn’t fully fix tail behavior.
+
+### Residuals vs fitted
+
+No major heteroskedasticity; any bias at the top categories is minor and a bit reduced vs PO.
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#========================================================
+# 9) (Optional) VISUAL CHECK: EFFECT VS THRESHOLDS
+#========================================================
+# Visualize cumulative probabilities across a chosen varying predictor
+j <- which(names_Zv == "BMI")  # one column from Zv to visualize
+x_seq <- seq(min(Zv[, j]), max(Zv[, j]), length.out = 60)
+Xc_bar <- if (Pc > 0) colMeans(Xc) else numeric(0)
+Zv_bar <- colMeans(Zv)
+
+make_row <- function(zj) {
+  z <- Zv_bar; z[j] <- zj
+  list(xc = Xc_bar, zv = z)
+}
+rows <- lapply(x_seq, make_row)
+
+eta_c_grid <- if (Pc > 0) sapply(rows, function(r) sum(r$xc * Bmean)) else rep(0, length(rows))
+#q_grid <- sapply(1:(K-1), function(k) {
+ # eta_v_k <- sapply(rows, function(r) sum(r$zv * Gmean[k, ]))
+  #plogis(Cmean[k] - (eta_c_grid + eta_v_k))
+#})
+#q_grid <- t(q_grid)  # length(x_seq) x (K-1)
+
+#df_po <- as.data.frame(q_grid)
+#colnames(df_po) <- paste0("Pr(Y<=k)@k=", 1:(K-1))
+#df_po$x <- x_seq
+
+q_grid <- sapply(rows, function(r) {
+  eta_c_val <- if (Pc > 0) sum(r$xc * Bmean) else 0
+  sapply(1:(K-1), function(k) {
+    eta_v_k <- sum(r$zv * Gmean[k, ])
+    plogis(Cmean[k] - (eta_c_val + eta_v_k))
+  })
+})
+q_grid <- t(q_grid)  # rows = length(x_seq), cols = K-1
+
+df_po <- as.data.frame(q_grid)
+colnames(df_po) <- paste0("Pr(Y<=k)@k=", 1:(K-1))
+df_po$x <- x_seq
+
+df_long <- pivot_longer(df_po, cols = starts_with("Pr("),
+                        names_to = "threshold", values_to = "cumprob")
+
+ggplot(df_long, aes(x = x, y = cumprob, color = threshold)) +
+  geom_line(size = 1) +
+  labs(title = paste("PPO: Cumulative probabilities across", names_Zv[j]),
+       x = names_Zv[j], y = "Cumulative probability") +
+  theme_minimal()
+
+```
+### Proportional-odds visual check for BMI
+
+PO holds for BMI (non-proportionality is handled by other predictor(s) in PPO, not BMI).
+
+
+```{r Diagnostic part II, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+#========================================================
+# 10) WAIC / PSIS-LOO — PPO (uses ll[i])
+#========================================================
+model_ppo_base_diag <- jags.model("ppo_model_base.jags",
+                             data = data_jags_ppo,
+                             inits = inits_ppo, n.chains = 3)
+update(model_ppo_base_diag, 2000)  # burn-in
+
+diag_ppo <- jags.samples(model_ppo_base_diag, variable.names = c("ll"), n.iter = 5000)
+
+ll_arr <- diag_ppo$ll
+ll_mat <- do.call(rbind, lapply(seq_len(dim(ll_arr)[2]), function(ch) ll_arr[, ch, ]))
+
+# Dimensions: draws x N
+cat("Number of draws:", nrow(ll_mat), "\n")
+cat("Number of observations:", ncol(ll_mat), "\n")
+
+waic_ppo <- waic(ll_mat)
+loo_ppo  <- loo(ll_mat)
+
+print(waic_ppo)
+print(loo_ppo)
+
+
+# STORE PPO PROBABILITIES FOR LATER COMPARISON
+
+P_bayes_PPO <- P_ppo_mean   # used in global comparison step
+
+```
+### WAIC / LOO (diagnostic)
+
+On this small log-likelihood matrix, PPO shows better out-of-sample fit; for formal comparison, compute on all observations.
+
+Bottom line
+
+The PPO model fits the data well (counts + calibration), keeps PO for BMI, and improves predictive criteria on the diagnostic run. Residual tails remain heavier than normal but are not alarming.
+
+
+
+
+# 11) Frequentist Analysis (PO + PPO)
+
+In this section of the project, we complement our Bayesian ordinal regression analysis with a **frequentist perspective**. We fit both **proportional odds (PO)** and **partial proportional odds (PPO)** models using the `ordinal` package in R, and then compare results against our Bayesian models using multiple performance metrics. This allows us to validate findings across paradigms and check consistency of conclusions.  
+
+
+  
+
+### 11.1 Frequentist PO Model  
+
+We fit a **cumulative logit proportional odds (PO) model** using `clm()`.  
+- The model assumes the effect of each predictor is constant across thresholds.  
+- Results include regression coefficients, cutpoints, and global likelihood-based fit indices (logLik, AIC, BIC).  
+- We also run score tests (`nominal_test`) to identify predictors potentially violating proportional odds.  
+
+```{r Frequentist PO part, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+
+data_clm <- data.frame(data)
+data_clm$CAEC <- data1$CAEC
+data_clm <- data_clm[ , !(names(data) %in% c("CAEC_Sometimes", "CAEC_Frequently", "CAEC_Always"))]
+
+# The `clm` function will handle the dummy variable creation internally,
+# using 'no' as the baseline.
+
+data_clm$CAEC <- factor(data_clm$CAEC,
+                        levels = c("no", "Sometimes", "Frequently", "Always"),
+                        ordered = FALSE)
+
+table(data_clm$CAEC)
+
+clm_predictors <- c(
+  "Gender", "Age", "FamHist_Overweight", "Veg_Freq", 
+  "Meals_Per_Day", "Water_Intake", "PhysAct_Freq", 
+  "Tech_Use", "BMI", "CAEC")
+
+X_clm <- data_clm[,clm_predictors]
+df_clm <- data_clm[, c("Obesity_category", clm_predictors)]
+
+# Make sure predictors are numeric/factor as intended
+str(df_clm)
+
+# cumulative logit / proportional odds
+form_po <- as.formula(paste("Obesity_category ~", paste(clm_predictors, collapse = " + ")))
+fit_po_freq <- clm(form_po, data = df_clm, link = "logit")
+
+summary(fit_po_freq)        # coefficients, cutpoints
+logLik(fit_po_freq); AIC(fit_po_freq); BIC(fit_po_freq)
+
+# Optional: score tests for violations of PO
+# (tests whether each term needs non-parallel/nominal effects)
+nominal_test(fit_po_freq)   # if small p-values -> consider PPO for those terms
+
+
+```
+
+# PO Model Fit
+
+The outcome distribution was highly imbalanced (**CAEC**: No = 51, Sometimes = 1,765, Frequently = 242, Always = 53).
+
+* **Model fit:**
+
+  * logLik = −354.22
+  * AIC = 744.43
+  * BIC = 846.22
+    (used for same-data model comparison only)
+
+* **Coefficient interpretation (cumulative-logit scale):**
+
+  * **BMI:** very strong positive common effect (29.67 ± 1.44, p < 2e−16), shifting probability toward higher obesity categories.
+  * **Gender:** clearly negative (−1.26 ± 0.24, p ≈ 1.7e−7).
+  * **CAEC = Sometimes:** borderline positive (1.29 ± 0.68, p = 0.059).
+  * Other predictors’ coefficients largely overlap zero.
+
+* **Cutpoints (thresholds):**
+
+  * Ordered and widely spaced: (−40.32, −17.74, −9.30, 2.25, 18.64, 34.48).
+  * Confirms well-separated ordinal categories.
+
+* **Diagnostics (tests for proportional-odds assumption):**
+
+  * Likely violations: Gender, Veg\_Freq, Meals\_Per\_Day, Water\_Intake, PhysAct\_Freq, Tech\_Use.
+  * Borderline: FamHist.
+  * Not significant: Age.
+  * CAEC showed no overall violation.
+  * BMI was not tested here but appeared acceptable in prior visual checks.
+
+# Conclusion
+
+The PO model provides a **reasonable baseline**, dominated by strong effects of BMI and Gender. However, multiple predictors show suspected violations of the proportional-odds assumption. This motivates fitting a **partial proportional-odds (PPO) model** with threshold-specific effects, and comparing PO vs PPO using **AIC/BIC** and **Bayesian criteria (LOO/WAIC)** to confirm improved fit.
+
+---
+
+
+### 11.2 Frequentist PPO Model  
+
+Next, we fit a **partial proportional odds (PPO) model**, relaxing the proportional odds assumption for flagged predictors.  
+- Predictors violating proportional odds are modeled with threshold-specific effects.  
+- The `nominal` argument in `clm()` enables this relaxation.  
+- Fit statistics (logLik, AIC, BIC) allow us to directly compare PPO vs PO.  
+
+```{r Frequentist PPO part, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+
+clm_predictors <- c(
+  "Gender", "Age", "FamHist_Overweight", "Veg_Freq", 
+  "Meals_Per_Day", "Water_Intake", "PhysAct_Freq", 
+  "Tech_Use", "BMI", "CAEC")
+
+
+# (relax PO for flagged predictors) ---
+# subset that violated PO
+vary_vars <- c("Veg_Freq", "BMI",
+               "Water_Intake", "CAEC")
+
+common_vars <- setdiff(clm_predictors, vary_vars)
+
+# form_ppo_main needs both common and nominal variables
+form_ppo_main <- as.formula(paste("Obesity_category ~", paste(clm_predictors, collapse = " + ")))
+
+# form_ppo_nom needs only the nominal variables.
+# This will tell `clm` to relax the PO assumption for these variables.
+form_ppo_nom <- as.formula(paste("~", paste(vary_vars, collapse = " + ")))
+
+
+fit_ppo_freq <- clm(form_ppo_main,
+                    nominal = form_ppo_nom,            # allow non-parallel effects for vary_vars
+                    data = df_clm, link = "logit",method = "nlminb")
+
+summary(fit_ppo_freq)
+logLik(fit_ppo_freq); AIC(fit_ppo_freq); BIC(fit_ppo_freq)
+
+
+```
+
+
+* **Model comparison:**
+
+  * PO baseline: logLik = −354.22, AIC = 744.43, BIC = 846.22.
+  * PPO model: logLik = −207.47, AIC = 510.95, BIC = 782.38.
+  * **Improvement:** ΔAIC ≈ −233 and ΔBIC ≈ −64, indicating a substantially better fit even after penalizing added complexity.
+
+* **Threshold-specific coefficients:**
+
+  * Large and varying across cutpoints.
+  * Clear evidence of non-proportional effects:
+
+    * BMI terms differ markedly across thresholds.
+    * Several CAEC contrasts are extreme, likely reflecting class imbalance.
+  * This heterogeneity explains the improved model fit relative to PO.
+
+* **Warnings/diagnostics:**
+
+  * Many standard errors reported as NA.
+  * 6 singularities present.
+  * Very large condition number (cond.H ≈ 3.6 × 10¹⁸).
+  * These issues indicate **severe collinearity/separation** and unstable inference for some threshold-specific terms.
+
+
+* PPO is **preferred** based on information criteria (AIC, BIC) and captures genuine threshold heterogeneity.
+* However, standard errors and singularities signal instability:
+
+  * Interpret coefficients qualitatively (signs/directions) rather than quantitatively.
+  * Prioritize model stabilization:
+
+    * Center/scale continuous predictors.
+    * Reduce or merge sparse categorical levels.
+    * Limit the nominal set to only those predictors clearly violating proportional odds.
+    * Explore penalized estimation to mitigate collinearity/separation.
+
+**Bottom line:** The PPO model offers improved fit and captures non-proportional effects, but uncertainty must be reported cautiously until the estimation is regularized and standard errors are reliable.
+
+---
+
+
+
+# 12) Metrics & Comparison (Bayesian vs Frequentist)  
+
+We systematically compare **Bayesian** and **frequentist** models using predictive performance metrics.  
+
+### 12.1 Metrics Defined  
+We compute four metrics for each model:  
+- **Brier Score (multiclass):** Calibration measure (lower = better).  
+- **Log Loss:** Penalizes miscalibrated predictions (lower = better).  
+- **MAP Accuracy:** Proportion of correct predicted classes (higher = better).  
+- **Ordinal MAE:** Mean absolute error in predicted category index (lower = better).  
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+# --- Helper metrics ---
+one_hot <- function(y, K) {
+  Y <- matrix(0, nrow = length(y), ncol = K)
+  Y[cbind(seq_along(y), y)] <- 1
+  Y
+}
+brier_mc <- function(P, y) {
+  Y <- one_hot(y, ncol(P))
+  mean(rowSums((P - Y)^2))
+}
+logloss_mc <- function(P, y, eps = 1e-12) {
+  p_obs <- pmax(pmin(P[cbind(seq_along(y), y)], 1 - eps), eps)
+  -mean(log(p_obs))
+}
+acc_map <- function(P, y) {
+  yhat <- max.col(P, ties.method = "first")
+  mean(yhat == y)
+}
+mae_ord <- function(P, y) {
+  Ey <- as.numeric(P %*% (1:ncol(P)))
+  mean(abs(Ey - y))
+}
+
+```
+
+
+### 12.2 Frequentist Probabilities  
+- `predict(..., type="prob")` extracts class probabilities for PO and PPO models.  
+- These are compared against Bayesian posterior mean probabilities (`p_mean` for PO and `P_bayes_PPO` if estimated).  
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+# Predicted probabilities from frequentist models
+# PO:
+P_freq_PO <- predict(fit_po_freq, newdata = X_clm, type = "prob")  # matrix N x K
+# PPO (if fit):
+P_freq_PPO <- tryCatch(predict(fit_ppo_freq, newdata = X_clm, type = "prob"),
+                       error = function(e) NULL)
+```
+
+### 12.3 Metrics Table  
+A consolidated table ranks models by Log Loss. This allows us to see which model best balances fit and predictive calibration. 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+# Bayesian PO probabilities
+
+# p_mean  (N x K) from posterior mean (Bmean, Cmean)
+P_bayes_PO <- p_mean
+
+```
+
+**Conclusion:**  
+
+- If **Freq_PPO > Freq_PO** (lower AIC/BIC, better predictive scores), the PO assumption is rejected.  
+- If **Bayes_PPO > Bayes_PO** (lower Log Loss, better PPC), Bayesian PPO captures richer structure.  
+- If **Bayesian and Frequentist PO models align**, it confirms priors were weakly informative and consistent with data. 
+
+
+### 12.4 Bayesian PPO Probabilities  
+
+For the Bayesian PPO model, predicted probabilities can be computed using posterior means of proportional coefficients (`β`), non-proportional coefficients (`γ`), and cutpoints.  
+- This step parallels the Bayesian PO predictions but allows threshold-varying effects.  
+- If PPO was fit, we extract these probabilities (`P_bayes_PPO`) to include in performance comparisons.  
+- If not, the section is skipped safely. 
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#   P_bayes_PPO <- pred_probs_ppo(Bmean_ppo, Gmean_ppo, Cmean_ppo, Xc = X_common, Zv = Z_vary)
+# For now we’ll guard it:
+P_bayes_PPO <- if (exists("P_bayes_PPO")) P_bayes_PPO else NULL
+```
+
+
+### 12.5 Compute Metrics for Each Model  
+
+We aggregate results from all models (Bayes PO, Bayes PPO, Freq PO, Freq PPO) into a single metrics table.  
+- Each row shows Brier score, Log Loss, Accuracy, and MAE.  
+- Sorting by Log Loss highlights which model balances fit and calibration best.  
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+
+metrics_list <- list(
+  Bayes_PO  = list(P = P_bayes_PO),
+  Bayes_PPO = list(P = P_bayes_PPO),
+  Freq_PO   = list(P = P_freq_PO$fit),
+  Freq_PPO  = list(P = P_freq_PPO$fit)
+)
+
+metrics_table <- lapply(names(metrics_list), function(name) {
+  P <- metrics_list[[name]]$P
+  if (is.null(P)) return(NULL)
+  data.frame(
+    Model  = name,
+    Brier  = brier_mc(P, y),
+    LogLoss= logloss_mc(P, y),
+    AccMAP = acc_map(P, y),
+    MAE    = mae_ord(P, y)
+  )
+})
+
+metrics_table <- do.call(rbind, Filter(Negate(is.null), metrics_table))
+print(metrics_table, row.names = FALSE)
+
+```
+
+
+# Interpretation of Predictive Metrics
+
+* **Best LogLoss (probabilistic sharpness):**
+
+  * *Freq\_PPO* achieves the lowest LogLoss (0.0983).
+  * However, it has a poor Brier score (0.1651) and the lowest Accuracy.
+  * predictions are sharp but **miscalibrated/unstable**.
+
+* **Best overall balance (calibration + accuracy):**
+
+  * *Bayes\_PPO* yields the lowest Brier score (0.0837) and the highest Accuracy (0.9493).
+  * It also shows the second-best LogLoss.
+  * MAE is slightly higher compared to PO models.
+
+* **Closest ordinal predictions (distance-sensitive):**
+
+  * *Freq\_PO* achieves the lowest MAE (0.0898).
+  * Brier and LogLoss are comparable to *Bayes\_PO*.
+
+* **Baseline comparison (Bayes\_PO vs Freq\_PO):**
+
+  * Very similar Brier and LogLoss values.
+  * *Bayes\_PO* has marginally higher Accuracy.
+  * *Freq\_PO* shows lower MAE.
+
+# Conclusion
+
+* **Choose Bayes\_PPO** when the priority is **well-calibrated, accurate probabilities**.
+* **Choose Freq\_PO** when **ordinal closeness (low MAE)** is the main goal.
+* Treat *Freq\_PPO*’s excellent LogLoss result with caution until calibration and stability are improved.
+
+---
+
+
+### 12.6 Likelihood-Based Model Selection (Frequentist)  
+
+For frequentist models, we also use **log-likelihood, AIC, and BIC** to compare PO and PPO.  
+- Lower AIC/BIC values indicate a better balance of fit and complexity.  
+- PPO is preferred if these values improve relative to PO.  
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+
+# (Comparable within frequentist family; AIC/BIC smaller is better)
+comp_lik <- data.frame(
+  Model = c("Freq_PO", "Freq_PPO")[c(TRUE, !is.null(P_freq_PPO))],
+  logLik = c(as.numeric(logLik(fit_po_freq)),
+             if (!is.null(P_freq_PPO)) as.numeric(logLik(fit_ppo_freq)) else NA),
+  AIC    = c(AIC(fit_po_freq),
+             if (!is.null(P_freq_PPO)) AIC(fit_ppo_freq) else NA),
+  BIC    = c(BIC(fit_po_freq),
+             if (!is.null(P_freq_PPO)) BIC(fit_ppo_freq) else NA)
+)
+print(comp_lik, row.names = FALSE)
+```
+
+* **Log-likelihood:** PPO (−207.47) fits the data much better than PO (−354.22).
+* **AIC:** PPO (510.95) is substantially lower than PO (744.43), showing improved fit even after penalizing complexity.
+* **BIC:** PPO (782.38) is also lower than PO (846.22), though the gap is smaller, reflecting stronger complexity penalization.
+
+# Conclusion
+
+* The **PPO model is preferred** to PO based on both log-likelihood and information criteria (AIC, BIC).
+* The improvement in AIC is particularly strong, while BIC still favors PPO but highlights the cost of additional parameters.
+
+ 
+ 
+ 
+# 13. Final Conclusion Across All Models
+
+Bringing together Bayesian and frequentist proportional-odds (PO) and partial proportional-odds (PPO) models:
+
+* **Frequentist PO (Freq_PO):**
+  - Serves as a solid baseline.
+  - Best at **ordinal closeness** (lowest MAE).
+  - Simple and interpretable, but assumes proportional odds that may not always hold.
+
+* **Frequentist PPO (Freq_PPO):**
+  - Achieves the **sharpest predictions** (lowest LogLoss).
+  - However, shows **poor calibration** (high Brier, low Accuracy).
+  - Diagnostic issues (singularities, NA standard errors, huge condition number) suggest unstable inference; interpret with caution.
+
+* **Bayesian PO (Bayes_PO):**
+  - Very similar performance to Freq_PO.
+  - Slightly higher Accuracy and better calibration.
+  - Useful as a Bayesian baseline with shrinkage benefits.
+
+* **Bayesian PPO (Bayes_PPO):**
+  - **Best overall balance**: lowest Brier, highest Accuracy, strong LogLoss.
+  - Captures genuine **non-proportional effects**.
+  - Provides the most **well-calibrated and accurate probabilistic predictions**.
+  - Recommended model for reporting and substantive inference.
+
+## Bottom Line
+
+- **Bayes_PPO is the preferred model**, as it balances fit, calibration, and interpretability, while accounting for threshold-specific effects.  
+- **Freq_PO remains a strong fallback** when prioritizing ordinal distance (MAE) or model simplicity.  
+- **Freq_PPO’s sharpness** is attractive but undermined by instability.  
+- Together, results confirm that relaxing proportional odds is justified, but the Bayesian framework regularizes estimation and yields the most reliable conclusions.
+
+ 
